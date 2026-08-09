@@ -59,6 +59,10 @@ export const loader = async () => {
                 productType
                 tracksInventory
 
+                category {
+                  fullName
+                }
+
                 translations(locale: "lv") {
                   key
                   value
@@ -166,22 +170,28 @@ export const loader = async () => {
         const productUrl =
           `${PUBLIC_DOMAIN}/products/${product.handle}`;
 
-        const image = product.featuredImage?.url ?? "";
+        const image =
+          product.featuredImage?.url ?? "";
 
-        const stockQuantity = product.tracksInventory
-          ? Math.max(variant?.inventoryQuantity ?? 0, 0)
-          : "";
+        const stockQuantity =
+          product.tracksInventory
+            ? Math.max(
+                variant?.inventoryQuantity ?? 0,
+                0
+              )
+            : "";
 
         const category =
-          getTranslation(product.translations, "product_type") ||
-          product.productType ||
-          "";
+          (product.category?.fullName ?? "").trim() ||
+          (product.productType ?? "").trim() ||
+          "Attīstošās rotaļlietas";
 
-        const numericPrice = Number.parseFloat(price);
+        const numericPrice =
+          Number.parseFloat(price);
 
-        // Bezmaksas piegāde tikai pirkumiem VIRs 50 €
         const deliveryPrice =
-          Number.isFinite(numericPrice) && numericPrice > 50
+          Number.isFinite(numericPrice) &&
+          numericPrice > 50
             ? "0"
             : "2.49";
 
@@ -209,7 +219,8 @@ export const loader = async () => {
       })
       .join("");
 
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8"?>
 <root>
 ${productXml}
 </root>`;
@@ -221,10 +232,16 @@ ${productXml}
       },
     });
   } catch (error) {
-    console.error("Salidzini XML error:", error);
+    console.error(
+      "Salidzini XML error:",
+      error
+    );
 
-    return new Response("Failed to generate Salidzini XML", {
-      status: 500,
-    });
+    return new Response(
+      "Failed to generate Salidzini XML",
+      {
+        status: 500,
+      }
+    );
   }
 };
