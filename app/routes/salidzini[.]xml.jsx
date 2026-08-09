@@ -1,5 +1,8 @@
 import { unauthenticated } from "../shopify.server";
 
+const SHOP_DOMAIN = "20715d-ja.myshopify.com";
+const PUBLIC_DOMAIN = "https://www.nolokids.lv";
+
 function escapeXml(value = "") {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -9,63 +12,101 @@ function escapeXml(value = "") {
     .replaceAll("'", "&apos;");
 }
 
+function getColor(selectedOptions = []) {
+  const colorOption = selectedOptions.find((option) => {
+    const name = String(option.name || "").toLowerCase();
+
+    return (
+      name === "color" ||
+      name === "colour" ||
+      name === "krāsa" ||
+      name === "krasa"
+    );
+  });
+
+  return colorOption?.value || "";
+}
+
 export const loader = async () => {
-  const shop = "salidzini-feed-test-a2zidwg2.myshopify.com";
-
   try {
-    const { admin } = await unauthenticated.admin(shop);
+    const { admin } = await unauthenticated.admin(SHOP_DOMAIN);
 
-    const response = await admin.graphql(`
-      #graphql
-      query GetProducts {
-        products(first: 50, query: "status:active") {
-          nodes {
-            id
-            title
-            handle
-            vendor
-            productType
-            onlineStoreUrl
-            totalInventory
-            tracksInventory
+    let products = [];
+    let cursor = null;
+    let hasNextPage = true;
 
-            featuredImage {
-              url
-            }
-
-            variants(first: 1) {
+    while (hasNextPage) {
+      const response = await admin.graphql(
+        `
+          #graphql
+          query GetProducts($cursor: String) {
+            products(
+              first: 100
+              after: $cursor
+              query: "status:active"
+            ) {
               nodes {
-                price
-                sku
-                inventoryQuantity
-                inventoryPolicy
+                id
+                title
+                handle
+                vendor
+                productType
+                onlineStoreUrl
+                totalInventory
+                tracksInventory
+
+                featuredImage {
+                  url
+                }
+
+                variants(first: 1) {
+                  nodes {
+                    price
+                    sku
+                    barcode
+                    inventoryQuantity
+                    inventoryPolicy
+
+                    selectedOptions {
+                      name
+                      value
+                    }
+                  }
+                }
+              }
+
+              pageInfo {
+                hasNextPage
+                endCursor
               }
             }
           }
+        `,
+        {
+          variables: {
+            cursor,
+          },
         }
+      );
+
+      const data = await response.json();
+
+      if (data.errors) {
+        console.error("Shopify GraphQL errors:", data.errors);
+
+        return new Response("Failed to load products", {
+          status: 500,
+        });
       }
-    `);
 
-    const data = await response.json();
+      const page = data.data?.products;
 
-    if (data.errors) {
-      console.error("Shopify GraphQL errors:", data.errors);
+      products.push(...(page?.nodes ?? []));
 
-      return new Response("Failed to load products", {
-        status: 500,
-      });
+      hasNextPage = page?.pageInfo?.hasNextPage ?? false;
+      cursor = page?.pageInfo?.endCursor ?? null;
     }
 
-    const products = data.data?.products?.nodes ?? [];
-
-    /*
-     * Izlaižam tikai tās preces, kurām:
-     * - Shopify seko noliktavas atlikumam;
-     * - atlikums ir 0 vai mazāks;
-     * - un nav atļauts pārdot pēc izpārdošanas.
-     *
-     * Ja inventory tracking nav ieslēgts, preci atstājam XML.
-     */
     const availableProducts = products.filter((product) => {
       const variant = product.variants?.nodes?.[0];
 
@@ -73,16 +114,27 @@ export const loader = async () => {
         return false;
       }
 
+      /*
+       * Ja Shopify inventory tracking nav ieslēgts,
+       * produktu atstājam feedā.
+       */
       if (!product.tracksInventory) {
         return true;
       }
 
+      /*
+       * Ja ir reāls atlikums, produktu atstājam.
+       */
       const quantity = variant.inventoryQuantity ?? 0;
 
       if (quantity > 0) {
         return true;
       }
 
+      /*
+       * Ja Shopify atļauj pārdot arī pēc izpārdošanas,
+       * produktu arī atstājam.
+       */
       return variant.inventoryPolicy === "CONTINUE";
     });
 
@@ -92,35 +144,33 @@ export const loader = async () => {
 
         const price = variant?.price ?? "";
         const sku = variant?.sku ?? "";
+        const ean = variant?.barcode ?? "";
 
+        /*
+         * Salidzini.lv saitei izmantojam publisko
+         * reģistrēto veikala domēnu.
+         */
         const productUrl =
-          product.onlineStoreUrl ||
-          `https://${shop}/products/${product.handle}`;
+          `${PUBLIC_DOMAIN}/products/${product.handle}`;
 
         const image = product.featuredImage?.url ?? "";
 
         /*
-         * Noliktavas daudzums.
-         *
-         * Ja Shopify inventory tracking ir ieslēgts,
-         * izmantojam faktisko daudzumu.
-         *
-         * Ja tracking nav ieslēgts, 0 neliekam,
-         * jo tas nepatiesi nozīmētu "nav noliktavā".
+         * Ja noliktavas uzskaite nav ieslēgta,
+         * atstājam in_stock tukšu.
          */
         const stockQuantity = product.tracksInventory
           ? Math.max(variant?.inventoryQuantity ?? 0, 0)
           : "";
 
-        /*
-         * Nosaukums:
-         * vendor + product title.
-         *
-         * Ja title jau sākas ar vendor, vendor neatkārtojam.
-         */
         const vendor = (product.vendor ?? "").trim();
         const title = (product.title ?? "").trim();
 
+        /*
+         * Nosaukums: zīmols + produkta nosaukums.
+         * Ja zīmols jau ir nosaukuma sākumā,
+         * neatkārtojam to divreiz.
+         */
         let productName = title;
 
         if (
@@ -130,21 +180,22 @@ export const loader = async () => {
           productName = `${vendor} ${title}`;
         }
 
-        // Salidzini.lv pieļaujamais nosaukuma garums — 200 simboli.
-        productName = productName.slice(0, 200);
+        productName = productName.trim().slice(0, 200);
 
-        const category = product.productType ?? "";
+        const category = (product.productType ?? "").trim();
+        const color = getColor(variant?.selectedOptions ?? []);
 
         /*
-         * Modelim izmantojam SKU, ja tas ir norādīts.
-         * MPN arī izmanto SKU.
+         * Pašlaik SKU izmantojam arī kā modeli/MPN,
+         * ja atsevišķs ražotāja modeļa kods nav pieejams.
          */
         const model = sku;
+        const mpn = sku;
 
         /*
          * Piegāde:
-         * līdz €50 = €2.49
-         * virs €50 = bezmaksas.
+         * līdz €50 -> €2.49
+         * virs €50 -> bezmaksas
          */
         const numericPrice = Number.parseFloat(price);
 
@@ -164,11 +215,12 @@ export const loader = async () => {
     <in_stock>${escapeXml(stockQuantity)}</in_stock>
     <brand>${escapeXml(vendor)}</brand>
     <model>${escapeXml(model)}</model>
-    <color></color>
-    <mpn>${escapeXml(sku)}</mpn>
-    <ean></ean>
+    <color>${escapeXml(color)}</color>
+    <mpn>${escapeXml(mpn)}</mpn>
+    <ean>${escapeXml(ean)}</ean>
     <delivery_latvija>${deliveryPrice}</delivery_latvija>
     <delivery_days_latvija>3</delivery_days_latvija>
+    <delivery_days_shop></delivery_days_shop>
     <service_fee>0</service_fee>
     <used></used>
     <adult>no</adult>
