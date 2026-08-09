@@ -12,19 +12,25 @@ function escapeXml(value = "") {
     .replaceAll("'", "&apos;");
 }
 
-function getColor(selectedOptions = []) {
-  const colorOption = selectedOptions.find((option) => {
-    const name = String(option.name || "").toLowerCase();
+function getTranslation(translations = [], key) {
+  return (
+    translations.find(
+      (translation) =>
+        translation.key === key &&
+        translation.locale === "lv" &&
+        !translation.outdated
+    )?.value || ""
+  );
+}
 
-    return (
-      name === "color" ||
-      name === "colour" ||
-      name === "krāsa" ||
-      name === "krasa"
-    );
+function getColor(selectedOptions = []) {
+  const option = selectedOptions.find((item) => {
+    const name = String(item.name || "").toLowerCase();
+
+    return ["color", "colour", "krāsa", "krasa"].includes(name);
   });
 
-  return colorOption?.value || "";
+  return option?.value || "";
 }
 
 export const loader = async () => {
@@ -51,9 +57,14 @@ export const loader = async () => {
                 handle
                 vendor
                 productType
-                onlineStoreUrl
-                totalInventory
                 tracksInventory
+
+                translations(locale: "lv") {
+                  key
+                  value
+                  locale
+                  outdated
+                }
 
                 featuredImage {
                   url
@@ -110,31 +121,18 @@ export const loader = async () => {
     const availableProducts = products.filter((product) => {
       const variant = product.variants?.nodes?.[0];
 
-      if (!variant) {
-        return false;
-      }
+      if (!variant) return false;
 
-      /*
-       * Ja Shopify inventory tracking nav ieslēgts,
-       * produktu atstājam feedā.
-       */
       if (!product.tracksInventory) {
         return true;
       }
 
-      /*
-       * Ja ir reāls atlikums, produktu atstājam.
-       */
       const quantity = variant.inventoryQuantity ?? 0;
 
       if (quantity > 0) {
         return true;
       }
 
-      /*
-       * Ja Shopify atļauj pārdot arī pēc izpārdošanas,
-       * produktu arī atstājam.
-       */
       return variant.inventoryPolicy === "CONTINUE";
     });
 
@@ -142,65 +140,47 @@ export const loader = async () => {
       .map((product) => {
         const variant = product.variants?.nodes?.[0];
 
+        const lvTitle =
+          getTranslation(product.translations, "title") ||
+          product.title ||
+          "";
+
+        const vendor = (product.vendor ?? "").trim();
+
+        let productName = lvTitle.trim();
+
+        if (
+          vendor &&
+          !productName.toLowerCase().startsWith(vendor.toLowerCase())
+        ) {
+          productName = `${vendor} ${productName}`;
+        }
+
+        productName = productName.slice(0, 200);
+
         const price = variant?.price ?? "";
         const sku = variant?.sku ?? "";
         const ean = variant?.barcode ?? "";
+        const color = getColor(variant?.selectedOptions ?? []);
 
-        /*
-         * Salidzini.lv saitei izmantojam publisko
-         * reģistrēto veikala domēnu.
-         */
         const productUrl =
           `${PUBLIC_DOMAIN}/products/${product.handle}`;
 
         const image = product.featuredImage?.url ?? "";
 
-        /*
-         * Ja noliktavas uzskaite nav ieslēgta,
-         * atstājam in_stock tukšu.
-         */
         const stockQuantity = product.tracksInventory
           ? Math.max(variant?.inventoryQuantity ?? 0, 0)
           : "";
 
-        const vendor = (product.vendor ?? "").trim();
-        const title = (product.title ?? "").trim();
+        const category =
+          getTranslation(product.translations, "product_type") ||
+          product.productType ||
+          "";
 
-        /*
-         * Nosaukums: zīmols + produkta nosaukums.
-         * Ja zīmols jau ir nosaukuma sākumā,
-         * neatkārtojam to divreiz.
-         */
-        let productName = title;
-
-        if (
-          vendor &&
-          !title.toLowerCase().startsWith(vendor.toLowerCase())
-        ) {
-          productName = `${vendor} ${title}`;
-        }
-
-        productName = productName.trim().slice(0, 200);
-
-        const category = (product.productType ?? "").trim();
-        const color = getColor(variant?.selectedOptions ?? []);
-
-        /*
-         * Pašlaik SKU izmantojam arī kā modeli/MPN,
-         * ja atsevišķs ražotāja modeļa kods nav pieejams.
-         */
-        const model = sku;
-        const mpn = sku;
-
-        /*
-         * Piegāde:
-         * līdz €50 -> €2.49
-         * virs €50 -> bezmaksas
-         */
         const numericPrice = Number.parseFloat(price);
 
         const deliveryPrice =
-          Number.isFinite(numericPrice) && numericPrice > 50
+          Number.isFinite(numericPrice) && numericPrice >= 50
             ? "0"
             : "2.49";
 
@@ -214,9 +194,9 @@ export const loader = async () => {
     <image>${escapeXml(image)}</image>
     <in_stock>${escapeXml(stockQuantity)}</in_stock>
     <brand>${escapeXml(vendor)}</brand>
-    <model>${escapeXml(model)}</model>
+    <model>${escapeXml(sku)}</model>
     <color>${escapeXml(color)}</color>
-    <mpn>${escapeXml(mpn)}</mpn>
+    <mpn>${escapeXml(sku)}</mpn>
     <ean>${escapeXml(ean)}</ean>
     <delivery_latvija>${deliveryPrice}</delivery_latvija>
     <delivery_days_latvija>3</delivery_days_latvija>
