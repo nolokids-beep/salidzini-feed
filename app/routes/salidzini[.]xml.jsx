@@ -179,8 +179,9 @@ export const loader = async () => {
 
         const numericPrice = Number.parseFloat(price);
 
+        // Bezmaksas piegāde tikai pirkumiem VIRs 50 €
         const deliveryPrice =
-          Number.isFinite(numericPrice) && numericPrice >= 50
+          Number.isFinite(numericPrice) && numericPrice > 50
             ? "0"
             : "2.49";
 
